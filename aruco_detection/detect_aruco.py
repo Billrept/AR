@@ -55,7 +55,7 @@ def pose_estimation(frame, aruco_dict_type, matrix_coefficients, distortion_coef
 ######################## Take rvec and tvec here for things and stuff ###############################################
             # rvec = rotation vector
             # tvec = Translation vector
-
+            
             success, rvec, tvec = cv2.solvePnP(
                 object_points, corners[i][0], matrix_coefficients, distortion_coefficients
             )
@@ -70,7 +70,7 @@ def pose_estimation(frame, aruco_dict_type, matrix_coefficients, distortion_coef
 
 def detect_aruco(): 
     # Change according to wanted detection
-    aruco_type = "DICT_4X4_50"
+    aruco_type = "DICT_7X7_1000"
 
     aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT[aruco_type])
 
