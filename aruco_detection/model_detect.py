@@ -69,7 +69,7 @@ def project_obj_solid(frame, rvec, tvec, obj_data, camera_matrix, dist_coeffs):
 
 def main():
     #Load da OBJ model
-    obj_data = load_obj("/Users/phacharakimpha/comp vision/ass/aruco_detection/cube/tinker.obj")
+    obj_data = load_obj("/Users/phacharakimpha/")
 
     scale_factor = compute_scale_factor(obj_data, 0.15)
     scale_obj(obj_data, scale_factor)

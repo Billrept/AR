@@ -2,114 +2,183 @@ import cv2
 import numpy as np
 from generate_aruco import ARUCO_DICT
 
-def aruco_display(corners, ids, rejected, image):
-    if len(corners) > 0:
-        ids = ids.flatten()
+# def pose_estimation(frame, aruco_dict_type, matrix_coefficients, distortion_coefficients):
+#     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        for (markerCorner, markerID) in zip(corners, ids):
-            corners = markerCorner.reshape((4, 2))
-            (topLeft, topRight, bottomRight, bottomLeft) = corners
-            
-            # Coordinates of each corner of each marker (if needed)
-            topRight = (int(topRight[0]), int(topRight[1]))
-            bottomRight = (int(bottomRight[0]), int(bottomRight[1]))
-            bottomLeft = (int(bottomLeft[0]), int(bottomLeft[1]))
-            topLeft = (int(topLeft[0]), int(topLeft[1]))
-
-            cv2.line(image, topLeft, topRight, (0, 255, 0), 2)
-            cv2.line(image, topRight, bottomRight, (0, 255, 0), 2)
-            cv2.line(image, bottomRight, bottomLeft, (0, 255, 0), 2)
-            cv2.line(image, bottomLeft, topLeft, (0, 255, 0), 2)
-
-            # Coordinates of center of marker (if needed)
-            cX = int((topLeft[0] + bottomRight[0]) / 2.0)
-            cY = int((topLeft[1] + bottomRight[1]) / 2.0)
-            cv2.circle(image, (cX, cY), 4, (0, 0, 255), -1)
-
-            cv2.putText(image, str(markerID), (topLeft[0], topLeft[1] - 10), cv2.FONT_HERSHEY_PLAIN, 0.5, (0, 255, 0), 2)
-            print(f"Detected ArUco marker ID: {markerID}")
-
-    return image
-
-def pose_estimation(frame, aruco_dict_type, matrix_coefficients, distortion_coefficients):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    aruco_dict = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
+#     aruco_dict = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
     
-    parameters = cv2.aruco.DetectorParameters()
+#     parameters = cv2.aruco.DetectorParameters()
 
-    detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+#     detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
 
-    corners, ids, rejected_img_points = detector.detectMarkers(gray)
+#     corners, ids, rejected_img_points = detector.detectMarkers(gray)
 
-    if ids is not None:
-        for i in range(len(ids)):
-            marker_length = 0.1  # Marker size in meters (Change to acutal values)
-            object_points = np.array([
-                [-marker_length / 2, marker_length / 2, 0],
-                [marker_length / 2, marker_length / 2, 0],
-                [marker_length / 2, -marker_length / 2, 0],
-                [-marker_length / 2, -marker_length / 2, 0]
-            ], dtype=np.float32)
+#     if ids is not None:
+#         for i in range(len(ids)):
+#             marker_length = 0.1  # Marker size in meters (Change to acutal values)
+#             object_points = np.array([
+#                 [-marker_length / 2, marker_length / 2, 0],
+#                 [marker_length / 2, marker_length / 2, 0],
+#                 [marker_length / 2, -marker_length / 2, 0],
+#                 [-marker_length / 2, -marker_length / 2, 0]
+#             ], dtype=np.float32)
 
-######################## Take rvec and tvec here for things and stuff ###############################################
-            # rvec = rotation vector
-            # tvec = Translation vector
-            
-            success, rvec, tvec = cv2.solvePnP(
-                object_points, corners[i][0], matrix_coefficients, distortion_coefficients
-            )
+#             success, rvec, tvec = cv2.solvePnP(
+#                 object_points, corners[i][0], matrix_coefficients, distortion_coefficients
+#             )
 
-            if success:
+#             if success:
 
-                cv2.aruco.drawDetectedMarkers(frame, corners)
-                cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.1)
+#                 cv2.aruco.drawDetectedMarkers(frame, corners)
+#                 cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.1)
 
-    return frame
+#     return frame
 
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
 
-def detect_aruco(): 
-    # Change according to wanted detection
-    aruco_type = "DICT_7X7_1000"
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
 
-    aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT[aruco_type])
-
-    aruco_params = cv2.aruco.DetectorParameters()
-
-    # Calculate both of this again on another camera
-    intrinsic_camera = np.array(((637.97833597, 0, 316.43616487), (0, 638.78431852, 238.96752943), (0, 0, 1)))
-    distortion = np.array((-0.05768105, 0.5123163, -0.00516302, 0.00400248, -1.74148176))
+def detect_aruco_manual():
+    marker_type = "DICT_7X7_1000" # better on far marker (more precision)
+    aruco_dict_type = ARUCO_DICT[marker_type]
+    
+    # mac cam parameters
+    intrinsic_camera = np.array([
+        [953.78782288, 0.0, 642.36740727],
+        [0.0, 953.48758172, 349.33238922],
+        [0.0, 0.0, 1.0]
+        ])
+    distortion = np.array([ 4.76145886e-02, -2.41452809e-02, 9.83416329e-05, -2.73093975e-03, 1.72122111e-02])
 
     cap = cv2.VideoCapture(0)
-
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    
+    if not cap.isOpened():
+        print("Error: Could not open camera.")
+        return
 
-    while cap.isOpened():
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Error: Failed to capture frame.")
+            break
 
-        ret, img = cap.read()
-
-        h, w, _ = img.shape
-
+        h, w, _ = frame.shape
         width = 1000
-        height = int(width*(h/w))
-        img = cv2.resize(img, (width, height), interpolation=cv2.INTER_CUBIC)
+        height = int(width * (h / w))
+        frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_CUBIC)
+        display_frame = frame.copy()
+        
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        binary = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 19, 2
+        )
 
-        detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
+        kernel = np.ones((3, 3), np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
-        corners, ids, rejected = detector.detectMarkers(img)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < 1000 or area > width*height*0.5:
+                continue
+                
+            peri = cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+            
+            if len(approx) == 4:
+                pts = approx.reshape(4, 2).astype(np.float32)
+                rect = order_points(pts)
+                
+                width_marker = np.sqrt(((rect[1][0] - rect[0][0]) ** 2) + ((rect[1][1] - rect[0][1]) ** 2))
+                height_marker = np.sqrt(((rect[3][0] - rect[0][0]) ** 2) + ((rect[3][1] - rect[0][1]) ** 2))
 
-        # detected_markers = aruco_display(corners, ids, rejected, img)
-        output = pose_estimation(img, ARUCO_DICT[aruco_type], intrinsic_camera, distortion)
+                # prevent zero division that from width_marker / height_marker
+                if width_marker > 1e-6 and height_marker > 1e-6: # using small epsilon instead of exact zero
+                    aspect_ratio = width_marker / height_marker
+                    
+                    if 0.8 <= aspect_ratio <= 1.2:
+                        dst_size = 100
+                        dst_points = np.array([
+                            [0, 0],
+                            [dst_size-1, 0],
+                            [dst_size-1, dst_size-1],
+                            [0, dst_size-1]
+                        ], dtype=np.float32)
+                        
+                        # get perspective of auco marker
+                        M = cv2.getPerspectiveTransform(rect, dst_points)
+                        warped = cv2.warpPerspective(gray, M, (dst_size, dst_size))
+                        
+                        # threshold the warped image
+                        _, marker_binary = cv2.threshold(warped, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+                        border = 10
+                        border_pixels = np.sum(marker_binary[:border, :]) + np.sum(marker_binary[-border:, :]) + \
+                                      np.sum(marker_binary[:, :border]) + np.sum(marker_binary[:, -border:])
+                        border_avg = border_pixels / (4 * border * dst_size)
+                        
+                        if border_avg > 200:
+                            marker_length = 0.100 # real marker size
+                            object_points = np.array([
+                                [-marker_length/2, marker_length/2, 0],
+                                [marker_length/2, marker_length/2, 0],
+                                [marker_length/2, -marker_length/2, 0],
+                                [-marker_length/2, -marker_length/2, 0]
+                            ], dtype=np.float32)
+                            
+                            try:
+                                success, rvec, tvec = cv2.solvePnP(
+                                    object_points, rect, intrinsic_camera, distortion
+                                )
+                                
+                                if success:
+                                    # draw the detected marker
+                                    cv2.polylines(display_frame, [np.int32(rect)], True, (0, 255, 0), 2)
+                                    
+                                    # draw coordinate axes
+                                    cv2.drawFrameAxes(display_frame, intrinsic_camera, 
+                                                     distortion, rvec, tvec, 0.05)
+                                    
+                                    # add marker type on opecv window
+                                    center = np.mean(rect, axis=0).astype(int)
+                                    cv2.putText(display_frame, f"ArUco", 
+                                               (center[0]-20, center[1]-30),
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    
+                                    distance = np.linalg.norm(tvec) * 0.75  # Apply correction factor 0.12/0.16
+                                    
+                                    # ลองอันนี้ดู
+                                    # distance = abs(tvec[2][0])  # Use this instead if it's more accurate
+                                    
+                                    cv2.putText(display_frame, f"Dist: {distance:.3f}m",
+                                               (center[0]-30, center[1]-10),
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                    
+                            except cv2.error:
+                                pass
+                else:
+                    continue
 
-        cv2.imshow("Press q to exit", output)
-
+        cv2.imshow("Binary Threshold", binary)
+        cv2.imshow("Manual ArUco Detection - Press q to exit", display_frame)
+        
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
 
-    cv2.destroyAllWindows()
     cap.release()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    detect_aruco()
+    detect_aruco_manual()
