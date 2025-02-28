@@ -45,6 +45,93 @@ def order_points(pts):
     rect[3] = pts[np.argmax(diff)]
     return rect
 
+def decode_aruco_marker(marker_binary, dict_type="DICT_7X7_1000"):
+    """
+    Decodes an ArUco marker with error correction
+    """
+    # Get marker dimensions based on dictionary type
+    if "7X7" in dict_type:
+        grid_size = 7
+    elif "6X6" in dict_type:
+        grid_size = 6
+    elif "5X5" in dict_type:
+        grid_size = 5
+    elif "4X4" in dict_type:
+        grid_size = 4
+    else:
+        grid_size = 7  # Default to 7x7
+    
+    # Calculate cell size in pixels
+    cell_size = marker_binary.shape[0] // grid_size
+    
+    # Initialize grid to store binary values
+    grid = np.zeros((grid_size-2, grid_size-2), dtype=np.uint8)
+    
+    # Extract the inner grid (excluding the border)
+    for i in range(1, grid_size-1):
+        for j in range(1, grid_size-1):
+            # Calculate center of current cell
+            cell_center_x = j * cell_size + cell_size // 2
+            cell_center_y = i * cell_size + cell_size // 2
+            
+            # Sample a small region around the center (more robust)
+            sample_size = cell_size // 3
+            cell_region = marker_binary[
+                cell_center_y-sample_size:cell_center_y+sample_size,
+                cell_center_x-sample_size:cell_center_x+sample_size
+            ]
+            
+            # Determine if cell is black or white
+            if cell_region.mean() > 127:  # Adjust threshold if needed
+                grid[i-1, j-1] = 1
+            else:
+                grid[i-1, j-1] = 0
+    
+    # Implement basic error detection using parity check
+    # Assuming the last row and column contain parity bits
+    valid = True
+    corrections_made = 0
+    
+    # Check row parity
+    for i in range(grid.shape[0]-1):
+        row_sum = np.sum(grid[i, :-1]) % 2
+        if row_sum != grid[i, -1]:
+            valid = False
+            corrections_made += 1
+            # Attempt correction if only one error found
+            if corrections_made <= 1:
+                # Find the most likely error position
+                for j in range(grid.shape[1]-1):
+                    test_grid = grid.copy()
+                    test_grid[i, j] = 1 - test_grid[i, j]  # Flip the bit
+                    if np.sum(test_grid[i, :-1]) % 2 == grid[i, -1]:
+                        grid[i, j] = test_grid[i, j]  # Apply correction
+                        break
+    
+    # Check column parity
+    for j in range(grid.shape[1]-1):
+        col_sum = np.sum(grid[:-1, j]) % 2
+        if col_sum != grid[-1, j]:
+            valid = False
+            corrections_made += 1
+            # Attempt correction if only one error found
+            if corrections_made <= 1:
+                # Find the most likely error position
+                for i in range(grid.shape[0]-1):
+                    test_grid = grid.copy()
+                    test_grid[i, j] = 1 - test_grid[i, j]  # Flip the bit
+                    if np.sum(test_grid[:-1, j]) % 2 == grid[-1, j]:
+                        grid[i, j] = test_grid[i, j]  # Apply correction
+                        break
+    
+    # Extract marker ID from the inner bits (excluding parity bits)
+    marker_bits = grid[:-1, :-1].flatten()
+    marker_id = 0
+    for bit in marker_bits:
+        marker_id = (marker_id << 1) | bit
+    
+    return marker_id, valid or corrections_made <= 1  # True if valid or corrected
+
 def detect_aruco_manual():
     marker_type = "DICT_7X7_1000" # better on far marker (more precision)
     aruco_dict_type = ARUCO_DICT[marker_type]
@@ -137,44 +224,44 @@ def detect_aruco_manual():
                         border_avg = border_pixels / (4 * border * dst_size)
                         
                         if border_avg > 200:
-                            marker_length = 0.100 # real marker size
-                            object_points = np.array([
-                                [-marker_length/2, marker_length/2, 0],
-                                [marker_length/2, marker_length/2, 0],
-                                [marker_length/2, -marker_length/2, 0],
-                                [-marker_length/2, -marker_length/2, 0]
-                            ], dtype=np.float32)
+                            # Try to decode the marker with error correction
+                            marker_id, is_valid = decode_aruco_marker(marker_binary, marker_type)
                             
-                            try:
-                                success, rvec, tvec = cv2.solvePnP(
-                                    object_points, rect, intrinsic_camera, distortion
-                                )
+                            if is_valid:
+                                marker_length = 0.100 # real marker size
+                                object_points = np.array([
+                                    [-marker_length/2, marker_length/2, 0],
+                                    [marker_length/2, marker_length/2, 0],
+                                    [marker_length/2, -marker_length/2, 0],
+                                    [-marker_length/2, -marker_length/2, 0]
+                                ], dtype=np.float32)
                                 
-                                if success:
-                                    # draw the detected marker
-                                    cv2.polylines(display_frame, [np.int32(rect)], True, (0, 255, 0), 2)
+                                try:
+                                    success, rvec, tvec = cv2.solvePnP(
+                                        object_points, rect, intrinsic_camera, distortion
+                                    )
                                     
-                                    # draw coordinate axes
-                                    cv2.drawFrameAxes(display_frame, intrinsic_camera, 
-                                                     distortion, rvec, tvec, 0.05)
-                                    
-                                    # add marker type on opecv window
-                                    center = np.mean(rect, axis=0).astype(int)
-                                    cv2.putText(display_frame, f"ArUco", 
-                                               (center[0]-20, center[1]-30),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                                    
-                                    distance = np.linalg.norm(tvec) * 0.75  # Apply correction factor 0.12/0.16
-                                    
-                                    # ลองอันนี้ดู
-                                    # distance = abs(tvec[2][0])  # Use this instead if it's more accurate
-                                    
-                                    cv2.putText(display_frame, f"Dist: {distance:.3f}m",
-                                               (center[0]-30, center[1]-10),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                                    
-                            except cv2.error:
-                                pass
+                                    if success:
+                                        # draw the detected marker
+                                        cv2.polylines(display_frame, [np.int32(rect)], True, (0, 255, 0), 2)
+                                        
+                                        # draw coordinate axes
+                                        cv2.drawFrameAxes(display_frame, intrinsic_camera, 
+                                                         distortion, rvec, tvec, 0.05)
+                                        
+                                        # add marker type and ID on opencv window
+                                        center = np.mean(rect, axis=0).astype(int)
+                                        cv2.putText(display_frame, f"ArUco ID: {marker_id}", 
+                                                   (center[0]-40, center[1]-30),
+                                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                        
+                                        distance = np.linalg.norm(tvec) * 0.75
+                                        cv2.putText(display_frame, f"Dist: {distance:.3f}m",
+                                                   (center[0]-30, center[1]-10),
+                                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                        
+                                except cv2.error:
+                                    pass
                 else:
                     continue
 
