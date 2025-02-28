@@ -50,13 +50,21 @@ def detect_aruco_manual():
     aruco_dict_type = ARUCO_DICT[marker_type]
     
     # mac cam parameters
-    intrinsic_camera = np.array([
-        [953.78782288, 0.0, 642.36740727],
-        [0.0, 953.48758172, 349.33238922],
-        [0.0, 0.0, 1.0]
-        ])
-    distortion = np.array([ 4.76145886e-02, -2.41452809e-02, 9.83416329e-05, -2.73093975e-03, 1.72122111e-02])
+    # intrinsic_camera = np.array([
+    #     [953.78782288, 0.0, 642.36740727],
+    #     [0.0, 953.48758172, 349.33238922],
+    #     [0.0, 0.0, 1.0]
+    #     ])
+    # distortion = np.array([ 4.76145886e-02, -2.41452809e-02, 9.83416329e-05, -2.73093975e-03, 1.72122111e-02])
 
+    #asus cam parameters
+    intrinsic_camera = np.array([
+        [938.51762171, 0, 617.83801429],
+        [0, 940.68786111, 316.6695038 ],
+        [0, 0, 1]
+    ])
+    distortion = np.array([0.02394387, -0.11535456, -0.01334333, -0.00231512,  0.22218833])
+    
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -170,7 +178,6 @@ def detect_aruco_manual():
                 else:
                     continue
 
-        cv2.imshow("Binary Threshold", binary)
         cv2.imshow("Manual ArUco Detection - Press q to exit", display_frame)
         
         key = cv2.waitKey(1) & 0xFF
