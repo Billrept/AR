@@ -1,8 +1,6 @@
 # Simple Cube Model
 
-mtllib cube.mtl
 o Cube
-usemtl GreenMaterial
 
 v -1.0 -1.0 -1.0
 v  1.0 -1.0 -1.0

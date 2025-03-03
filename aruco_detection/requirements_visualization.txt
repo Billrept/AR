@@ -1,0 +1,8 @@
+numpy
+opencv-python
+trimesh
+pyrender
+pyglet
+pillow
+scipy
+matplotlib
