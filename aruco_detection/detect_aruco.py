@@ -1,6 +1,30 @@
 import cv2
 import numpy as np
+import glfw
+import OpenGL.GL as gl
+import OpenGL.GLU as glu
+import pywavefront
+
 from generate_aruco import ARUCO_DICT
+
+width, height = 1280, 720
+# Create a GLFW window for OpenGL
+if not glfw.init():
+    raise Exception("GLFW initialization failed!")
+
+window = glfw.create_window(1280, 720, "Hidden OpenGL Window", None, None)
+if not window:
+    glfw.terminate()
+    raise Exception("GLFW window creation failed!")
+
+glfw.make_context_current(window)
+
+# Enable OpenGL settings
+gl.glEnable(gl.GL_DEPTH_TEST)
+
+# Load the 3D model
+model = pywavefront.Wavefront("E:\\AR\\aruco_detection\\cube\\cube.obj", collect_faces=True)
+
 
 def order_points(pts):
     rect = np.zeros((4, 2), dtype="float32")
@@ -34,17 +58,123 @@ def line_intersection(line1, line2):
     else:
         return (int(x), int(y))
 
+def draw_model():
+    gl.glBegin(gl.GL_TRIANGLES)
+    for mesh in model.mesh_list:
+        for face in mesh.faces:
+            for vertex_index in face:
+                gl.glVertex3fv(model.vertices[vertex_index])
+    gl.glEnd()
+
+
+def draw_cube_on_marker(rvec, tvec):
+    gl.glPushMatrix()
+
+    # Convert rotation vector to rotation matrix.
+    rotM, _ = cv2.Rodrigues(rvec)
+
+    print(rotM)
+
+    angle = np.deg2rad(180)  # Experiment with this angle
+    R_fix = cv2.Rodrigues(np.array([angle, 0, 0]))[0]
+    R_corrected = R_fix @ rotM
+
+    transform_matrix = np.eye(4, dtype=np.float32)
+    transform_matrix[:3, :3] = R_corrected
+    transform_matrix[:3, 3]  = tvec.squeeze()
+
+    # Fix the coordinate mismatch by flipping Z.
+    # (Adjust this fix as needed based on your coordinate conventions.)
+    fix = np.diag([-1, -1, -1, 1]).astype(np.float32)
+    transform_matrix = fix @ transform_matrix
+
+    # Apply the transformation.
+    gl.glMultMatrixf(transform_matrix.T)
+
+    gl.glTranslatef(-0.5, -0.5, -0.5)
+    gl.glScalef(1.0, 1.0, 1.0)
+
+    # gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+    gl.glColor3f(0, 1, 0)
+    draw_model()
+
+    # Draw wireframe overlay
+    gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+    gl.glLineWidth(2.0)
+    gl.glColor3f(0, 0, 0)
+    draw_model()
+
+    # Reset polygon mode
+    gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+    
+    gl.glPopMatrix()
+
+
+def create_fbo(width, height):
+    fbo = gl.glGenFramebuffers(1)
+    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo)
+    
+    texture = gl.glGenTextures(1)
+    gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+    gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,
+                    gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+    gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
+                              gl.GL_TEXTURE_2D, texture, 0)
+    
+    depth_buffer = gl.glGenRenderbuffers(1)
+    gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, depth_buffer)
+    gl.glRenderbufferStorage(gl.GL_RENDERBUFFER, gl.GL_DEPTH_COMPONENT, width, height)
+    gl.glFramebufferRenderbuffer(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                                 gl.GL_RENDERBUFFER, depth_buffer)
+    
+    status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
+    if status != gl.GL_FRAMEBUFFER_COMPLETE:
+        print("Framebuffer not complete:", status)
+    
+    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
+    return fbo, texture, depth_buffer
+
 def detect_aruco_manual():
+    width = 1280
+    height = 720
+
     marker_type = "DICT_7X7_1000" # better on far marker (more precision)
     aruco_dict_type = ARUCO_DICT[marker_type]
     
     # mac cam parameters
+    # intrinsic_camera = np.array([
+    #     [942.9176688, 0.0, 610.320383],
+    #     [0.0, 941.1945546, 378.8276605],
+    #     [0.0, 0.0, 1.0]
+    #     ])
+    # distortion = np.array([ 0.06040788, 0.25311179, 0.00882055, -0.01687159, -0.94299114])
+
     intrinsic_camera = np.array([
-        [942.9176688, 0.0, 610.320383],
-        [0.0, 941.1945546, 378.8276605],
-        [0.0, 0.0, 1.0]
+        [
+            972.2235455470136,
+            0.0,
+            660.6360368617749
+        ],
+        [
+            0.0,
+            970.1307217985412,
+            373.0913123853952
+        ],
+        [
+            0.0,
+            0.0,
+            1.0
+        ]
+    ])
+    distortion = np.array([
+            -0.04580851665559521,
+            0.5188255791507442,
+            2.5764275279818267e-05,
+            0.010661376404940514,
+            -1.321060059510769
         ])
-    distortion = np.array([ 0.06040788, 0.25311179, 0.00882055, -0.01687159, -0.94299114])
     
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -54,15 +184,15 @@ def detect_aruco_manual():
         print("Error: Could not open camera.")
         return
 
-    while True:
+    fbo, texture, depth_buffer = create_fbo(width, height)
+
+    while not glfw.window_should_close(window):
         ret, frame = cap.read()
         if not ret:
             print("Error: Failed to capture frame.")
             break
 
         h, w, _ = frame.shape
-        width = 1000
-        height = int(width * (h / w))
         frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_CUBIC)
         display_frame = frame.copy()
         
@@ -77,7 +207,8 @@ def detect_aruco_manual():
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+        marker_detected = False
+
         detected_markers = []
         
         for cnt in contours:
@@ -117,6 +248,7 @@ def detect_aruco_manual():
                         border_avg = border_pixels / (4 * border * dst_size)
                         
                         if border_avg > 200:
+                            marker_detected = True
                             marker_length = 0.049 # real marker size in meters
                             object_points = np.array([
                                 [-marker_length/2, marker_length/2, 0],
@@ -141,20 +273,56 @@ def detect_aruco_manual():
                                         'distance': distance
                                     })
                                     
-                                    cv2.polylines(display_frame, [np.int32(rect)], True, (0, 255, 0), 2)
-                                    cv2.drawFrameAxes(display_frame, intrinsic_camera, 
-                                                     distortion, rvec, tvec, 0.05)
-                                    
-                                    cv2.putText(display_frame, f"ArUco", 
-                                               (center[0]-20, center[1]-30),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                                    
-                                    cv2.putText(display_frame, f"Dist: {distance:.3f}m",
-                                               (center[0]-30, center[1]-10),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                    scale_factor = np.array([-19.0, 18.0, 10.0]).reshape(3, 1)
+                                    tvec *= scale_factor
+
+                                    # --- Render to FBO ---
+                                    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo)
+                                    gl.glViewport(0, 0, width, height)
+                                    # Clear with fully transparent background.
+                                    gl.glClearColor(0, 0, 0, 0)
+                                    gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+
+                                    # Setup perspective projection
+                                    gl.glMatrixMode(gl.GL_PROJECTION)
+                                    gl.glLoadIdentity()
+                                    glu.gluPerspective(45, float(w)/h, 0.1, 100.0)
+
+                                    # Setup ModelView with standard OpenGL camera.
+                                    gl.glMatrixMode(gl.GL_MODELVIEW)
+                                    gl.glLoadIdentity()
+                                    glu.gluLookAt(0, 0, 3.0, 0, 0, 0, 0, 1.0, 0)
+
+                                    draw_cube_on_marker(rvec, tvec)
+
+                                    # Read from the FBO (RGBA)
+                                    gl.glReadBuffer(gl.GL_COLOR_ATTACHMENT0)
+                                    rgba_raw = gl.glReadPixels(0, 0, width, height, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE)
+                                    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)  # Unbind FBO
+
+                                    fbo_frame = np.frombuffer(rgba_raw, dtype=np.uint8).reshape(height, width, 4)
+                                    fbo_frame = cv2.flip(fbo_frame, 0)  # Flip vertically
+
+                                    # --- Composite the FBO result over the camera feed ---
+                                    # Convert to float [0,1]
+                                    fbo_float = fbo_frame.astype(np.float32) / 255.0  # shape: (h, w, 4)
+                                    display_float = display_frame.astype(np.float32) / 255.0  # shape: (h, w, 3)
+
+                                    # Separate color and alpha from the FBO output.
+                                    alpha = fbo_float[..., 3:4]  # shape: (h, w, 1)
+                                    fbo_color = fbo_float[..., :3]  # shape: (h, w, 3)
+
+                                    # Perform alpha blending: final = fbo_color*alpha + camera*(1 - alpha)
+                                    blended_float = fbo_color * alpha + display_float * (1 - alpha)
+                                    blended = (blended_float * 255).astype(np.uint8)
+
+                                    cv2.imshow("AR Overlay", blended)
+
+                                else:
+                                    cv2.imshow("AR Overlay", display_frame)
                                     
                             except cv2.error:
-                                pass
+                                cv2.imshow("AR Overlay", display_frame)
                 else:
                     continue
         
@@ -235,14 +403,16 @@ def detect_aruco_manual():
                         pt2 = tuple(detected_markers[j]['center'])
                         cv2.line(display_frame, pt1, pt2, (0, 165, 255), 2)
 
-        cv2.imshow("Manual ArUco Detection - Press q to exit", display_frame)
-        
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
+        if not marker_detected:
+            cv2.imshow("AR Overlay", display_frame)
+
+        glfw.poll_events()
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     cap.release()
     cv2.destroyAllWindows()
+    glfw.terminate()
 
 if __name__ == "__main__":
     detect_aruco_manual()
