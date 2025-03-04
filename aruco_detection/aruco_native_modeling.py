@@ -8,22 +8,50 @@ import time
 import os
 
 # Configuration
-MODEL_PATH = "/Users/phacharakimpha/comp_vision/ass/aruco_detection/cube/tinker.obj"
+MODEL_PATH = "E:\\artest\\AR\\aruco_detection\\cube\\tinker.obj"
 WIDTH, HEIGHT = 1280, 720
 MARKER_LENGTH = 0.058  # ArUco marker size in meters
 ARUCO_DICT = cv2.aruco.DICT_7X7_1000  # Same dictionary as in the manual detection
 
 # Camera parameters - update with your calibrated values for best results
+# Mac parameters
+# CAMERA_MATRIX = np.array([
+#     [957.1108018720613, 0.0, 556.0882651177826],
+#     [0.0, 951.9753671508217, 286.42509589693657],
+#     [0.0, 0.0, 1.0]
+# ])
+
+# DISTORTION_COEFFS = np.array([
+#     -0.25856927733393603, 1.8456432127404514, -0.021219826734632862,
+#     -0.024902070756342175, -3.808238876719984
+# ])
+
+# Nano Parameters
 CAMERA_MATRIX = np.array([
-    [957.1108018720613, 0.0, 556.0882651177826],
-    [0.0, 951.9753671508217, 286.42509589693657],
-    [0.0, 0.0, 1.0]
-])
+        [
+            967.229637877688,
+            0.0,
+            650.0636729430692
+        ],
+        [
+            0.0,
+            978.2884296325454,
+            279.4385529511379
+        ],
+        [
+            0.0,
+            0.0,
+            1.0
+        ]
+    ])
 
 DISTORTION_COEFFS = np.array([
-    -0.25856927733393603, 1.8456432127404514, -0.021219826734632862,
-    -0.024902070756342175, -3.808238876719984
-])
+            0.061815425198978924,
+            -0.5653239478518806,
+            -0.033745222064303845,
+            0.006614884900641152,
+            1.4894642088388304
+        ])
 
 # Model unit configuration
 MODEL_UNITS = 'millimeters'
@@ -125,6 +153,27 @@ class NativeArucoRenderer:
                     gl.glVertex3fv(self.model.vertices[vertex_index])
         gl.glEnd()
 
+    def draw_coordinate_axes(self, size=0.01):
+        """Draw coordinate axes at origin"""
+        gl.glBegin(gl.GL_LINES)
+        
+        # X axis (red)
+        gl.glColor3f(1.0, 0.0, 0.0)
+        gl.glVertex3f(0.0, 0.0, 0.0)
+        gl.glVertex3f(size, 0.0, 0.0)
+        
+        # Y axis (green)
+        gl.glColor3f(0.0, 1.0, 0.0)
+        gl.glVertex3f(0.0, 0.0, 0.0)
+        gl.glVertex3f(0.0, size, 0.0)
+        
+        # Z axis (blue)
+        gl.glColor3f(0.0, 0.0, 1.0)
+        gl.glVertex3f(0.0, 0.0, 0.0)
+        gl.glVertex3f(0.0, 0.0, size)
+        
+        gl.glEnd()
+
     def draw_on_marker(self, rvec, tvec):
         """Draw the 3D model at the position and orientation determined by rvec and tvec"""
         gl.glPushMatrix()
@@ -141,7 +190,7 @@ class NativeArucoRenderer:
         coordinate_fix = np.array([
             [1,  0,  0, 0],
             [0, -1,  0, 0],  # Flip Y axis
-            [0,  0, -1, 0],  # Flip Z axis (to make Z point toward camera)
+            [0,  0, -1, 0],  # Flip Z axis
             [0,  0,  0, 1]
         ])
         transform_matrix = coordinate_fix @ transform_matrix
@@ -149,24 +198,32 @@ class NativeArucoRenderer:
         # Apply the transformation matrix
         gl.glMultMatrixf(transform_matrix.T)
         
+        # Draw coordinate axes at the marker origin (rotation point)
+        self.draw_coordinate_axes()
+        
         # Scale the model to convert from model units to meters
         gl.glScalef(self.unit_scale, self.unit_scale, self.unit_scale)
         
-        # Center the model horizontally (X, Z) but place it on top of the marker (Y)
-        gl.glTranslatef(
-            -self.model_center[0], 
-            -self.y_offset,  # Place bottom of model on marker plane
-            -self.model_center[2]
-        )
+        # Small offset to prevent z-fighting
+        marker_offset = 0.0001
+
+        # 1. First center the model horizontally (X and Z only)
+        gl.glTranslatef(-self.model_center[0], 0, -self.model_center[2])
         
-        # Draw filled model
-        gl.glColor4f(0, 1, 0, 0.8)  # Slightly transparent green
+        # 2. Move the model so its base is at y=0 (plus small offset)
+        gl.glTranslatef(0, -self.min_bounds[1] + marker_offset, 0)
+
+        # gl.glTranslatef(50, 0, 0)
+        # gl.glRotatef(90, 0, 0, 1)
+        
+        # Draw filled model with less transparency
+        gl.glColor4f(0, 1, 0, 0.9)  # More opaque green
         self.draw_model()
 
         # Draw wireframe overlay
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         gl.glLineWidth(2.0)
-        gl.glColor3f(0, 0, 0)
+        gl.glColor4f(0, 0, 0, 1.0)  # Solid black lines
         self.draw_model()
 
         # Reset polygon mode
