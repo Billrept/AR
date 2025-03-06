@@ -4,6 +4,7 @@ import glfw
 import OpenGL.GL as gl
 import OpenGL.GLU as glu
 import pywavefront
+from stl import mesh  # Add this import for STL support
 import time
 import os
 
@@ -62,6 +63,22 @@ UNIT_CONVERSION = {
     'meters': 1.0
 }
 
+def load_stl_as_vertices_and_faces(stl_path):
+    """Convert STL file to vertices and faces format compatible with our renderer"""
+    stl_mesh = mesh.Mesh.from_file(stl_path)
+    
+    # Extract unique vertices and build faces
+    vertices = stl_mesh.vectors.reshape(-1, 3)
+    faces = np.arange(len(vertices)).reshape(-1, 3)
+    
+    # Create a simple class to match pywavefront's interface
+    class STLMesh:
+        def __init__(self, vertices, faces):
+            self.vertices = vertices
+            self.mesh_list = [type('Mesh', (), {'faces': faces})]
+    
+    return STLMesh(vertices, faces)
+
 class NativeArucoRenderer:
     def __init__(self, model_path=MODEL_PATH, width=WIDTH, height=HEIGHT):
         self.width = width
@@ -90,7 +107,13 @@ class NativeArucoRenderer:
         # Initialize OpenGL and load 3D model
         self.initialize_gl()
         try:
-            self.model = pywavefront.Wavefront(model_path, collect_faces=True)
+            # Load model based on file extension
+            file_ext = os.path.splitext(model_path)[1].lower()
+            if file_ext == '.stl':
+                self.model = load_stl_as_vertices_and_faces(model_path)
+            else:  # .obj files
+                self.model = pywavefront.Wavefront(model_path, collect_faces=True)
+            
             print(f"Loaded 3D model: {model_path}")
             self.analyze_model()
             self.create_model_display_list()  # Create display list after loading model
@@ -169,37 +192,6 @@ class NativeArucoRenderer:
         if self.model_display_list:
             gl.glCallList(self.model_display_list)
 
-    def __del__(self):
-        """Cleanup OpenGL resources"""
-        if self.model_display_list:
-            try:
-                gl.glDeleteLists(self.model_display_list, 1)
-            except:
-                pass
-        if hasattr(self, 'window'):
-            glfw.terminate()
-
-    def draw_coordinate_axes(self, size=0.01):
-        """Draw coordinate axes at origin"""
-        gl.glBegin(gl.GL_LINES)
-        
-        # X axis (red)
-        gl.glColor3f(1.0, 0.0, 0.0)
-        gl.glVertex3f(0.0, 0.0, 0.0)
-        gl.glVertex3f(size, 0.0, 0.0)
-        
-        # Y axis (green)
-        gl.glColor3f(0.0, 1.0, 0.0)
-        gl.glVertex3f(0.0, 0.0, 0.0)
-        gl.glVertex3f(0.0, size, 0.0)
-        
-        # Z axis (blue)
-        gl.glColor3f(0.0, 0.0, 1.0)
-        gl.glVertex3f(0.0, 0.0, 0.0)
-        gl.glVertex3f(0.0, 0.0, size)
-        
-        gl.glEnd()
-
     def draw_on_marker(self, rvec, tvec):
         """Draw the 3D model at the position and orientation determined by rvec and tvec"""
         gl.glPushMatrix()
@@ -223,9 +215,6 @@ class NativeArucoRenderer:
 
         # Apply the transformation matrix
         gl.glMultMatrixf(transform_matrix.T)
-        
-        # Draw coordinate axes at the marker origin (rotation point)
-        self.draw_coordinate_axes()
         
         # Scale the model to convert from model units to meters
         MODEL_SCALE = 1.1
