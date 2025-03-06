@@ -8,9 +8,9 @@ import time
 import os
 
 # Configuration
-MODEL_PATH = "E:\\artest\\AR\\aruco_detection\\cube\\tinker.obj"
+MODEL_PATH = "E:\\artest\\AR\\aruco_detection\\cube\\Mickey Mouse.obj"
 WIDTH, HEIGHT = 1280, 720
-MARKER_LENGTH = 0.058  # ArUco marker size in meters
+MARKER_LENGTH = 0.0485  # ArUco marker size in meters
 ARUCO_DICT = cv2.aruco.DICT_7X7_1000  # Same dictionary as in the manual detection
 
 # Camera parameters - update with your calibrated values for best results
@@ -84,12 +84,16 @@ class NativeArucoRenderer:
         # Unit conversion factor
         self.unit_scale = UNIT_CONVERSION.get(MODEL_UNITS, 1.0)
         
+        # Add display list ID for model caching
+        self.model_display_list = None
+        
         # Initialize OpenGL and load 3D model
         self.initialize_gl()
         try:
             self.model = pywavefront.Wavefront(model_path, collect_faces=True)
             print(f"Loaded 3D model: {model_path}")
             self.analyze_model()
+            self.create_model_display_list()  # Create display list after loading model
         except Exception as e:
             print(f"Error loading model: {e}")
             raise
@@ -144,14 +148,36 @@ class NativeArucoRenderer:
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-    def draw_model(self):
-        """Draw the 3D model using its faces"""
+    def create_model_display_list(self):
+        """Create an OpenGL display list for the model"""
+        # Generate a new display list
+        self.model_display_list = gl.glGenLists(1)
+        gl.glNewList(self.model_display_list, gl.GL_COMPILE)
+        
+        # Draw the model
         gl.glBegin(gl.GL_TRIANGLES)
         for mesh in self.model.mesh_list:
             for face in mesh.faces:
                 for vertex_index in face:
                     gl.glVertex3fv(self.model.vertices[vertex_index])
         gl.glEnd()
+        
+        gl.glEndList()
+
+    def draw_model(self):
+        """Draw the cached model using display list"""
+        if self.model_display_list:
+            gl.glCallList(self.model_display_list)
+
+    def __del__(self):
+        """Cleanup OpenGL resources"""
+        if self.model_display_list:
+            try:
+                gl.glDeleteLists(self.model_display_list, 1)
+            except:
+                pass
+        if hasattr(self, 'window'):
+            glfw.terminate()
 
     def draw_coordinate_axes(self, size=0.01):
         """Draw coordinate axes at origin"""
@@ -202,28 +228,17 @@ class NativeArucoRenderer:
         self.draw_coordinate_axes()
         
         # Scale the model to convert from model units to meters
-        gl.glScalef(self.unit_scale, self.unit_scale, self.unit_scale)
+        MODEL_SCALE = 1.1
+        gl.glScalef(self.unit_scale * MODEL_SCALE, self.unit_scale * MODEL_SCALE, self.unit_scale * MODEL_SCALE)
         
-        # Small offset to prevent z-fighting
-        marker_offset = 0.0001
-
-        # 1. First center the model horizontally (X and Z only)
-        gl.glTranslatef(-self.model_center[0], 0, -self.model_center[2])
-        
-        # 2. Move the model so its base is at y=0 (plus small offset)
-        gl.glTranslatef(0, -self.min_bounds[1] + marker_offset, 0)
-
-        # gl.glTranslatef(50, 0, 0)
-        # gl.glRotatef(90, 0, 0, 1)
-        
-        # Draw filled model with less transparency
+        # Draw filled model
         gl.glColor4f(0, 1, 0, 0.9)  # More opaque green
         self.draw_model()
 
         # Draw wireframe overlay
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         gl.glLineWidth(2.0)
-        gl.glColor4f(0, 0, 0, 1.0)  # Solid black lines
+        gl.glColor4f(0, 0, 0, 1.0)
         self.draw_model()
 
         # Reset polygon mode
