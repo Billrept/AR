@@ -94,7 +94,7 @@ class NativeArucoRenderer:
         self.camera_matrix = CAMERA_MATRIX
         self.dist_coeffs = DISTORTION_COEFFS
         self.marker_length = MARKER_LENGTH
-        
+
         # Performance tracking
         self.last_detection_time = 0
         self.last_valid_rvecs = None
