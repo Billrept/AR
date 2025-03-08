@@ -30,7 +30,7 @@ def line_intersection(line1, line2):
     
     return (int(x), int(y))
 
-def detect_aruco_markers(frame=None, camera_index=0, marker_length=0.049,
+def detect_aruco_markers(frame=None, camera_index=0, marker_length=0.020,
                         intrinsic_camera=None, distortion=None, marker_type="DICT_7X7_1000",
                         debug_display=False):
     """

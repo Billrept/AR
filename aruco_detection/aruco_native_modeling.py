@@ -7,52 +7,54 @@ import pywavefront
 from stl import mesh  # Add this import for STL support
 import time
 import os
+from detect_aruco import detect_aruco_markers
+import sciqpy.spatial.transform as spt
 
 # Configuration
-MODEL_PATH = "E:\\artest\\AR\\aruco_detection\\cube\\Mickey Mouse.obj"
+MODEL_PATH = "/Users/phacharakimpha/comp_vision/ass/aruco_detection/cube/can_holder.STL"
 WIDTH, HEIGHT = 1280, 720
-MARKER_LENGTH = 0.0485  # ArUco marker size in meters
+MARKER_LENGTH = 0.020  # ArUco marker size in meters
 ARUCO_DICT = cv2.aruco.DICT_7X7_1000  # Same dictionary as in the manual detection
 
 # Camera parameters - update with your calibrated values for best results
 # Mac parameters
-# CAMERA_MATRIX = np.array([
-#     [957.1108018720613, 0.0, 556.0882651177826],
-#     [0.0, 951.9753671508217, 286.42509589693657],
-#     [0.0, 0.0, 1.0]
-# ])
-
-# DISTORTION_COEFFS = np.array([
-#     -0.25856927733393603, 1.8456432127404514, -0.021219826734632862,
-#     -0.024902070756342175, -3.808238876719984
-# ])
-
-# Nano Parameters
 CAMERA_MATRIX = np.array([
-        [
-            967.229637877688,
-            0.0,
-            650.0636729430692
-        ],
-        [
-            0.0,
-            978.2884296325454,
-            279.4385529511379
-        ],
-        [
-            0.0,
-            0.0,
-            1.0
-        ]
-    ])
+    [957.1108018720613, 0.0, 556.0882651177826],
+    [0.0, 951.9753671508217, 286.42509589693657],
+    [0.0, 0.0, 1.0]
+])
 
 DISTORTION_COEFFS = np.array([
-            0.061815425198978924,
-            -0.5653239478518806,
-            -0.033745222064303845,
-            0.006614884900641152,
-            1.4894642088388304
-        ])
+    -0.25856927733393603, 1.8456432127404514, -0.021219826734632862,
+    -0.024902070756342175, -3.808238876719984
+])
+
+# Nano Parameters
+# CAMERA_MATRIX = np.array([
+#         [
+#             967.229637877688,
+#             0.0,
+#             650.0636729430692
+#         ],
+#         [
+#             0.0,
+#             978.2884296325454,
+#             279.4385529511379
+#         ],
+#         [
+#             0.0,
+#             0.0,
+#             1.0
+#         ]
+#     ])
+
+# DISTORTION_COEFFS = np.array([
+#             0.061815425198978924,
+#             -0.5653239478518806,
+#             -0.033745222064303845,
+#             0.006614884900641152,
+#             1.4894642088388304
+#         ])
 
 # Model unit configuration
 MODEL_UNITS = 'millimeters'
@@ -62,6 +64,11 @@ UNIT_CONVERSION = {
     'inches': 0.0254,
     'meters': 1.0
 }
+
+# Stabilization parameters
+POSE_SMOOTHING_FACTOR = 0.85  # Higher value = more smoothing (0.0-1.0)
+USE_KALMAN_FILTER = True      # Whether to use Kalman filtering
+Z_AXIS_DAMPING = 0.7          # Damping factor specifically for Z-axis movements
 
 def load_stl_as_vertices_and_faces(stl_path):
     """Convert STL file to vertices and faces format compatible with our renderer"""
@@ -87,9 +94,6 @@ class NativeArucoRenderer:
         self.camera_matrix = CAMERA_MATRIX
         self.dist_coeffs = DISTORTION_COEFFS
         self.marker_length = MARKER_LENGTH
-        self.aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
-        self.aruco_params = cv2.aruco.DetectorParameters()
-        self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
         
         # Performance tracking
         self.last_detection_time = 0
@@ -120,7 +124,45 @@ class NativeArucoRenderer:
         except Exception as e:
             print(f"Error loading model: {e}")
             raise
+
+        # Add tracking variables for pose stabilization
+        self.last_valid_rvec = None
+        self.last_valid_tvec = None
+        self.filtered_rvec = None
+        self.filtered_tvec = None
+        
+        # Initialize Kalman filter for pose tracking
+        if USE_KALMAN_FILTER:
+            # State: [x, y, z, vx, vy, vz] - position and velocity
+            self.kalman = cv2.KalmanFilter(6, 3)
+            self.kalman.measurementMatrix = np.array([
+                [1, 0, 0, 0, 0, 0],
+                [0, 1, 0, 0, 0, 0],
+                [0, 0, 1, 0, 0, 0]
+            ], np.float32)
             
+            # Transition matrix (position + velocity model)
+            self.kalman.transitionMatrix = np.array([
+                [1, 0, 0, 1, 0, 0],
+                [0, 1, 0, 0, 1, 0],
+                [0, 0, 1, 0, 0, 1],
+                [0, 0, 0, 1, 0, 0],
+                [0, 0, 0, 0, 1, 0],
+                [0, 0, 0, 0, 0, 1]
+            ], np.float32)
+            
+            # Process noise
+            self.kalman.processNoiseCov = np.eye(6, dtype=np.float32) * 0.03
+            
+            # Initial state
+            self.kalman.statePre = np.zeros((6, 1), np.float32)
+            self.kalman.statePost = np.zeros((6, 1), np.float32)
+            
+            # Measurement noise - Z axis (depth) has higher uncertainty
+            self.kalman.measurementNoiseCov = np.diag([0.1, 0.1, 0.5]).astype(np.float32)
+            
+            self.kalman_initialized = False
+
     def analyze_model(self):
         """Analyze model dimensions and compute necessary transformations"""
         vertices = np.array(self.model.vertices)
@@ -328,7 +370,7 @@ class NativeArucoRenderer:
         blended = (blended_float * 255).astype(np.uint8)
 
         return blended
-        
+
     def calculate_central_pose(self, rvecs, tvecs):
         """Calculate a central pose from multiple detected markers"""
         if len(rvecs) == 1:
@@ -342,16 +384,96 @@ class NativeArucoRenderer:
         
         return central_rvec, central_tvec
 
+    def stabilize_pose(self, rvec, tvec):
+        """Apply stabilization techniques to reduce jitter in pose estimation"""
+        if self.last_valid_rvec is None:
+            # First detection, just store and return as is
+            self.last_valid_rvec = rvec.copy()
+            self.last_valid_tvec = tvec.copy()
+            self.filtered_rvec = rvec.copy()
+            self.filtered_tvec = tvec.copy()
+            return rvec, tvec
+        
+        # Apply Kalman filter to translation vector
+        if USE_KALMAN_FILTER:
+            # Flatten tvec for Kalman update
+            flat_tvec = tvec.flatten()
+            
+            if not self.kalman_initialized:
+                # Initialize Kalman with first measurement
+                self.kalman.statePre[:3] = flat_tvec.reshape(3, 1)
+                self.kalman.statePost[:3] = flat_tvec.reshape(3, 1)
+                self.kalman_initialized = True
+            
+            # Prediction step
+            predicted = self.kalman.predict()
+            
+            # Update step with measurement
+            measurement = np.array(flat_tvec, dtype=np.float32).reshape(3, 1)
+            corrected = self.kalman.correct(measurement)
+            
+            # Extract smoothed position
+            smoothed_tvec = corrected[:3].reshape(tvec.shape)
+        else:
+            # Without Kalman, use exponential smoothing
+            smoothed_tvec = tvec
+        
+        # Special handling for Z-axis stability (depth)
+        # Apply stronger smoothing to Z component specifically
+        smoothed_tvec[2] = self.last_valid_tvec[2] * Z_AXIS_DAMPING + smoothed_tvec[2] * (1 - Z_AXIS_DAMPING)
+        
+        # For rotation, convert to quaternions for proper interpolation
+        # This avoids gimbal lock issues with Euler angles
+        q1 = spt.Rotation.from_rotvec(self.last_valid_rvec.flatten()).as_quat()
+        q2 = spt.Rotation.from_rotvec(rvec.flatten()).as_quat()
+        
+        # Spherical linear interpolation between quaternions
+        alpha = 1.0 - POSE_SMOOTHING_FACTOR
+        dot_product = np.sum(q1 * q2)
+        
+        # If quaternions are on opposite hemispheres, flip one
+        if dot_product < 0:
+            q2 = -q2
+            dot_product = -dot_product
+        
+        # Determine interpolation weights
+        if dot_product > 0.9995:
+            # Quaternions are very close, use linear interpolation
+            smoothed_q = q1 + alpha * (q2 - q1)
+            smoothed_q /= np.linalg.norm(smoothed_q)
+        else:
+            # Use spherical linear interpolation (SLERP)
+            theta_0 = np.arccos(dot_product)
+            sin_theta_0 = np.sin(theta_0)
+            theta = theta_0 * alpha
+            sin_theta = np.sin(theta)
+            s1 = np.cos(theta) - dot_product * sin_theta / sin_theta_0
+            s2 = sin_theta / sin_theta_0
+            smoothed_q = s1 * q1 + s2 * q2
+        
+        # Convert back to rotation vector
+        smoothed_rvec = spt.Rotation.from_quat(smoothed_q).as_rotvec().reshape(rvec.shape)
+        
+        # Update stored values for next frame
+        self.last_valid_rvec = smoothed_rvec.copy()
+        self.last_valid_tvec = smoothed_tvec.copy()
+        
+        return smoothed_rvec, smoothed_tvec
+
     def detect_and_render(self, frame):
-        """Detect ArUco markers with native library and render 3D model"""
+        """Detect ArUco markers and render 3D model"""
         start_time = time.time()
         display_frame = frame.copy()
         
-        # Convert to grayscale for marker detection
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Detect ArUco markers
-        corners, ids, rejected = self.detector.detectMarkers(gray)
+        # Use the detect_aruco_markers function from detect_aruco.py
+        # This function returns a dictionary, not corners, ids, rejected
+        result = detect_aruco_markers(
+            frame=frame, 
+            debug_display=False,
+            intrinsic_camera=self.camera_matrix,
+            distortion=self.dist_coeffs,
+            marker_length=self.marker_length
+        )
         
         # Calculate FPS
         fps = 1.0 / (time.time() - start_time)
@@ -361,47 +483,72 @@ class NativeArucoRenderer:
         avg_fps = sum(self.fps_history) / len(self.fps_history)
         
         # If markers are detected
-        if ids is not None and len(ids) > 0:
+        if result["success"]:
             self.detection_history.append(1)  # Detected
             
-            # Draw detected markers
-            cv2.aruco.drawDetectedMarkers(display_frame, corners, ids)
-            
-            # Estimate pose for each marker
-            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                corners, self.marker_length, self.camera_matrix, self.dist_coeffs
-            )
+            # Get markers information from the result
+            markers = result["markers"]
+            central_rvec = result["central_rvec"]
+            central_tvec = result["central_tvec"]
+            central_distance = result.get("central_distance", 0.0)
             
             # Store the latest valid detection
             self.last_detection_time = time.time()
-            self.last_valid_rvecs = rvecs
-            self.last_valid_tvecs = tvecs
             
-            # Calculate distances for each marker
-            distances = [np.linalg.norm(tvec) for tvec in tvecs]
-            avg_distance = np.mean(distances)
+            # Store the rvecs and tvecs from all markers for later use
+            self.last_valid_rvecs = [marker['rvec'] for marker in markers]
+            self.last_valid_tvecs = [marker['tvec'] for marker in markers]
             
-            # Draw axes for each detected marker
-            for i in range(len(ids)):
-                cv2.drawFrameAxes(display_frame, self.camera_matrix, 
-                                 self.dist_coeffs, rvecs[i], tvecs[i], 0.05)
+            # Draw marker information
+            for marker in markers:
+                # Draw each marker
+                rect = marker['rect'].astype(np.int32)
+                cv2.polylines(display_frame, [rect], True, (0, 255, 0), 2)
                 
-                # Draw marker ID and distance
-                center_x = int(np.mean(corners[i][0][:, 0]))
-                center_y = int(np.mean(corners[i][0][:, 1]))
-                cv2.putText(display_frame, f"ID: {ids[i][0]}, D: {distances[i]:.2f}m", 
-                           (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                # Draw axes for this marker
+                cv2.drawFrameAxes(
+                    display_frame, 
+                    self.camera_matrix, 
+                    self.dist_coeffs, 
+                    marker['rvec'], 
+                    marker['tvec'], 
+                    0.05
+                )
+                
+                # Add text information
+                center = marker['center']
+                distance = marker['distance']
+                cv2.putText(
+                    display_frame, 
+                    f"D: {distance:.2f}m",
+                    (center[0] - 30, center[1] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.5, 
+                    (0, 0, 255), 
+                    2
+                )
             
-            # Calculate central pose from all detected markers
-            central_rvec, central_tvec = self.calculate_central_pose(rvecs, tvecs)
+            # Apply stabilization to the pose
+            stabilized_rvec, stabilized_tvec = self.stabilize_pose(central_rvec, central_tvec)
             
-            # Render the 3D model on the central pose
-            ar_frame = self.render_ar_overlay(central_rvec, central_tvec, display_frame)
+            # Render 3D model using the stabilized pose
+            ar_frame = self.render_ar_overlay(stabilized_rvec, stabilized_tvec, display_frame)
             
-            # Display information
+            # Add additional debug information about stabilization
+            cv2.putText(
+                ar_frame, 
+                f"Z depth: {stabilized_tvec[2][0]:.3f}m",
+                (10, 150),
+                cv2.FONT_HERSHEY_SIMPLEX, 
+                0.7, 
+                (255, 255, 0), 
+                2
+            )
+            
+            # Add debugging information
             cv2.putText(ar_frame, f"FPS: {avg_fps:.1f}", (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(ar_frame, f"Markers: {len(ids)}, Avg Dist: {avg_distance:.3f}m", 
+            cv2.putText(ar_frame, f"Markers: {len(markers)}, Dist: {central_distance:.3f}m", 
                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.putText(ar_frame, f"Model: {self.real_dimensions[0]:.2f}x{self.real_dimensions[1]:.2f}x{self.real_dimensions[2]:.2f}m", 
                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -416,11 +563,12 @@ class NativeArucoRenderer:
             return ar_frame
             
         else:
-            self.detection_history.append(0)  # Not detected
+            # No markers detected
+            self.detection_history.append(0)
             
-            # If we have a recent detection, use that
-            if self.last_valid_rvecs is not None and time.time() - self.last_detection_time < 0.5:
-                # Use the last valid central pose
+            # If we have a recent valid detection, use that
+            if self.last_valid_rvecs and time.time() - self.last_detection_time < 0.5:
+                # Calculate central pose from last detection
                 central_rvec, central_tvec = self.calculate_central_pose(
                     self.last_valid_rvecs, self.last_valid_tvecs
                 )
@@ -428,19 +576,19 @@ class NativeArucoRenderer:
                 # Render using the last known pose
                 ar_frame = self.render_ar_overlay(central_rvec, central_tvec, display_frame)
                 
-                # Show "using last detection" message
+                # Add a status message
                 cv2.putText(ar_frame, "Using last detection", (10, 150), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 return ar_frame
-                
-            # Show FPS even when no markers are detected
+            
+            # Show message when no markers are detected
             cv2.putText(display_frame, f"FPS: {avg_fps:.1f}", (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             cv2.putText(display_frame, "No markers detected", (10, 60), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                        
-            # Calculate detection stability
+            # Show detection stability
             if len(self.detection_history) > 100:
                 self.detection_history.pop(0)
             stability = sum(self.detection_history) / len(self.detection_history) * 100
